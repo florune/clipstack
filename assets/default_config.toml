@@ -1,0 +1,51 @@
+# clipstack 配置文件
+# 修改后在托盘菜单里点“重新加载配置”即可生效。
+#
+# 快捷键写法：修饰键 Ctrl / Alt / Shift / Win 用 + 连接主键，例如 "Ctrl+Shift+V"、"Win+Alt+F1"。
+# 主键可以是 A-Z、0-9、F1-F24、Enter、Tab、Esc、Space、Backspace、Delete、Insert、
+# Home、End、PageUp、PageDown、Up、Down、Left、Right。
+# 写成 "" 表示不注册这个快捷键。
+
+[general]
+# 最多保留多少条历史
+max_items = 1000
+# 单条内容超过这个大小（MB）就不记录
+max_item_mb = 64
+# 是否记录图片、文件
+record_images = true
+record_files = true
+# “粘贴上一条”或宏执行完之后，过多少毫秒把剪贴板恢复成当前内容
+restore_delay_ms = 300
+# 宏里每次粘贴之后等待多少毫秒；目标程序反应慢可以调大
+macro_paste_delay_ms = 150
+# 这些程序复制的内容不会被记录（按进程文件名匹配，不区分大小写）
+ignore_apps = ["KeePass.exe", "KeePassXC.exe", "1Password.exe", "Bitwarden.exe"]
+
+[hotkeys]
+# 粘贴上一条复制的内容（Ctrl+V 仍然是粘贴当前内容）
+paste_previous = "Ctrl+Shift+V"
+# 打开 / 关闭历史面板
+show_panel = "Ctrl+Alt+V"
+# 暂停 / 恢复记录
+toggle_pause = ""
+
+# ---------------------------------------------------------------------------
+# 序列宏：每个 [[macro]] 是一个宏，按下 hotkey 后依次执行 steps。
+#
+# 可用步骤：
+#   { paste = N }        粘贴第 N 条历史（1 = 当前内容，2 = 上一条……）
+#   { paste_plain = N }  同上，但只粘贴纯文本
+#   { key = "Tab" }      按一个键或组合键，例如 "Enter"、"Ctrl+A"
+#   { text = "你好" }     直接输入一段文字（不经过剪贴板）
+#   { sleep = 200 }      等待若干毫秒
+#
+# 示例：把最近复制的两条内容依次填进表单的两个输入框
+#
+# [[macro]]
+# name = "填两栏"
+# hotkey = "Ctrl+Alt+1"
+# steps = [
+#   { paste = 2 },
+#   { key = "Tab" },
+#   { paste = 1 },
+# ]
