@@ -21,6 +21,11 @@ use crate::input::key_down;
 pub const WM_PANEL_PASTE: u32 = WM_APP + 10;
 /// wparam = 条目 key。
 pub const WM_PANEL_DELETE: u32 = WM_APP + 11;
+/// 搜索框内容变了；宿主用 query() 读取后搜索，再用 set_rows() 回填结果。
+pub const WM_PANEL_QUERY: u32 = WM_APP + 12;
+
+/// 列表最多显示多少条。
+pub const MAX_ROWS: usize = 200;
 
 const CLASS: PCWSTR = w!("clipstack_panel");
 const ID_EDIT: i32 = 100;
@@ -31,7 +36,6 @@ const CUE: PCWSTR = w!("搜索…   Enter 粘贴 · Shift+Enter 纯文本 · Ctr
 pub struct Row {
     pub key: i64,
     pub label: String,
-    pub search: String,
 }
 
 struct Panel {
@@ -41,9 +45,8 @@ struct Panel {
     host: HWND,
     font: HFONT,
     dpi: u32,
+    /// 列表里正在显示的行。
     rows: Vec<Row>,
-    /// 当前列表里显示的行在 rows 里的下标。
-    shown: Vec<usize>,
 }
 
 thread_local! {
@@ -129,16 +132,7 @@ pub fn create(host: HWND, icon: HICON) -> windows::core::Result<()> {
         EDIT_PROC.set(orig);
 
         PANEL.with(|p| {
-            *p.borrow_mut() = Some(Panel {
-                hwnd,
-                edit,
-                list,
-                host,
-                font: HFONT::default(),
-                dpi: 0,
-                rows: Vec::new(),
-                shown: Vec::new(),
-            })
+            *p.borrow_mut() = Some(Panel { hwnd, edit, list, host, font: HFONT::default(), dpi: 0, rows: Vec::new() })
         });
         update_dpi(GetDpiForWindow(hwnd));
         Ok(())
@@ -215,12 +209,9 @@ pub fn hide() {
     }
 }
 
-/// 在鼠标附近显示面板。
+/// 在鼠标附近显示面板，搜索框清空，列表显示 `rows`（最近的记录）。
 pub fn show(rows: Vec<Row>) {
-    let Some((hwnd, edit)) = with_panel(|p| {
-        p.rows = rows;
-        (p.hwnd, p.edit)
-    }) else {
+    let Some((hwnd, edit)) = with_panel(|p| (p.hwnd, p.edit)) else {
         return;
     };
     unsafe {
@@ -240,7 +231,7 @@ pub fn show(rows: Vec<Row>) {
         layout();
         let _ = SetWindowTextW(edit, w!(""));
     }
-    refilter();
+    set_rows(rows);
     unsafe {
         let _ = ShowWindow(hwnd, SW_SHOW);
         force_foreground(hwnd);
@@ -275,29 +266,30 @@ fn window_text(hwnd: HWND) -> String {
     }
 }
 
-/// 按搜索框内容过滤并重建列表。多个关键词用空格分隔，需全部命中。
-fn refilter() {
-    let Some((edit, list)) = with_panel(|p| (p.edit, p.list)) else {
-        return;
-    };
-    let query = window_text(edit).to_lowercase();
-    let terms: Vec<&str> = query.split_whitespace().collect();
-    let Some(labels) = with_panel(|p| {
-        p.shown = p
-            .rows
-            .iter()
-            .enumerate()
-            .filter(|(_, r)| terms.iter().all(|t| r.search.contains(t)))
-            .map(|(i, _)| i)
-            .collect();
-        p.shown.iter().enumerate().map(|(n, &i)| wide(&format!("{}\t{}", n + 1, p.rows[i].label))).collect::<Vec<_>>()
+/// 搜索框当前内容。
+pub fn query() -> String {
+    with_panel(|p| p.edit).map(window_text).unwrap_or_default()
+}
+
+/// 替换列表内容并选中第一行。
+pub fn set_rows(mut rows: Vec<Row>) {
+    rows.truncate(MAX_ROWS);
+    let Some((list, labels)) = with_panel(|p| {
+        p.rows = rows;
+        let labels: Vec<Vec<u16>> =
+            p.rows.iter().enumerate().map(|(n, r)| wide(&format!("{}\t{}", n + 1, r.label))).collect();
+        (p.list, labels)
     }) else {
         return;
     };
+    render(list, &labels);
+}
+
+fn render(list: HWND, labels: &[Vec<u16>]) {
     unsafe {
         SendMessageW(list, WM_SETREDRAW, Some(WPARAM(0)), None);
         SendMessageW(list, LB_RESETCONTENT, None, None);
-        for label in &labels {
+        for label in labels {
             SendMessageW(list, LB_ADDSTRING, None, Some(LPARAM(label.as_ptr() as isize)));
         }
         SendMessageW(list, LB_SETCURSEL, Some(WPARAM(0)), None);
@@ -336,7 +328,7 @@ fn activate(index: Option<usize>, plain: bool) {
     let Some(sel) = selected_index(list, index) else {
         return;
     };
-    let Some(Some(key)) = with_panel(|p| p.shown.get(sel).map(|&i| p.rows[i].key)) else {
+    let Some(Some(key)) = with_panel(|p| p.rows.get(sel).map(|r| r.key)) else {
         return;
     };
     unsafe {
@@ -352,16 +344,19 @@ fn delete_selected() {
     let Some(sel) = selected_index(list, None) else {
         return;
     };
-    let Some(Some(key)) = with_panel(|p| {
-        let i = *p.shown.get(sel)?;
-        Some(p.rows.remove(i).key)
+    let Some(Some((key, rows))) = with_panel(|p| {
+        (sel < p.rows.len()).then(|| {
+            let mut rows = std::mem::take(&mut p.rows);
+            let key = rows.remove(sel).key;
+            (key, rows)
+        })
     }) else {
         return;
     };
     unsafe {
         let _ = PostMessageW(Some(host), WM_PANEL_DELETE, WPARAM(key as usize), LPARAM(0));
     }
-    refilter();
+    set_rows(rows);
     unsafe {
         let count = SendMessageW(list, LB_GETCOUNT, None, None).0;
         if count > 0 {
@@ -436,7 +431,12 @@ unsafe extern "system" fn panel_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARA
             let id = (wp.0 & 0xFFFF) as i32;
             let code = ((wp.0 >> 16) & 0xFFFF) as u32;
             match (id, code) {
-                (ID_EDIT, EN_CHANGE) => refilter(),
+                (ID_EDIT, EN_CHANGE) => {
+                    // 交给宿主搜索；连续输入时多条消息会在宿主那边按内容去重
+                    if let Some(host) = with_panel(|p| p.host) {
+                        let _ = unsafe { PostMessageW(Some(host), WM_PANEL_QUERY, WPARAM(0), LPARAM(0)) };
+                    }
+                }
                 (ID_LIST, LBN_SELCHANGE) => {
                     if let Some(edit) = with_panel(|p| p.edit) {
                         let _ = unsafe { SetFocus(Some(edit)) };

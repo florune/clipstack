@@ -2,6 +2,7 @@
 //!
 //! 一条记录只取一种“主类型”：文件列表 > 文本（附带 HTML / RTF 富文本）> 图片（CF_DIB）。
 
+use std::borrow::Cow;
 use std::thread;
 use std::time::Duration;
 
@@ -87,14 +88,21 @@ impl ClipData {
         }
     }
 
-    pub fn search_text(&self) -> String {
+    /// 写进全文索引的内容。超长文本只索引前 SEARCH_MAX_CHARS 个字符。
+    /// 与 store.rs 里迁移旧数据用的 SQL 保持一致。
+    pub fn search_body(&self) -> Cow<'_, str> {
         match self {
-            ClipData::Text { text, .. } => text.chars().take(4096).collect::<String>().to_lowercase(),
-            ClipData::Image { .. } => "图片 image".into(),
-            ClipData::Files { paths } => format!("文件 file {}", paths.join(" ")).to_lowercase(),
+            ClipData::Text { text, .. } => match text.char_indices().nth(SEARCH_MAX_CHARS) {
+                Some((end, _)) => Cow::Borrowed(&text[..end]),
+                None => Cow::Borrowed(text),
+            },
+            ClipData::Image { .. } => Cow::Borrowed("图片 image"),
+            ClipData::Files { paths } => Cow::Owned(format!("文件 file {}", paths.join(" "))),
         }
     }
 }
+
+pub const SEARCH_MAX_CHARS: usize = 500_000;
 
 /// 把多行文本压成一行并截断，用于列表展示。
 fn one_line(text: &str, max_chars: usize) -> String {

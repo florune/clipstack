@@ -1,5 +1,8 @@
-//! 内存里的历史列表（最新的在最前面），面板和快捷键都从这里取数据。
-//! 完整内容在 SQLite 里，这里只放预览和搜索用的文本。
+//! 内存里只缓存最近的一小段历史（最新的在最前面），供快捷键、宏和面板首屏使用。
+//! 完整历史和全文索引都在 SQLite 里，内存占用不随历史条数增长。
+
+/// 内存里最多缓存多少条最近的历史。
+pub const RECENT_CACHE: usize = 500;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
@@ -31,20 +34,24 @@ pub struct Entry {
     pub key: i64,
     pub kind: Kind,
     pub preview: String,
-    /// 小写，用于搜索。
-    pub search: String,
     pub last_used: i64,
 }
 
 pub struct History {
     items: Vec<Entry>,
-    max: usize,
+    cap: usize,
 }
 
 impl History {
-    pub fn new(mut items: Vec<Entry>, max: usize) -> History {
-        items.truncate(max);
-        History { items, max }
+    /// `max_items` 是配置里的历史上限；缓存取它和 RECENT_CACHE 中较小的那个。
+    pub fn new(items: Vec<Entry>, max_items: usize) -> History {
+        let mut h = History { items, cap: max_items.min(RECENT_CACHE) };
+        h.items.truncate(h.cap);
+        h
+    }
+
+    pub fn cap(&self) -> usize {
+        self.cap
     }
 
     pub fn get(&self, index: usize) -> Option<&Entry> {
@@ -59,10 +66,10 @@ impl History {
     pub fn push_front(&mut self, entry: Entry) {
         self.remove(entry.key);
         self.items.insert(0, entry);
-        self.items.truncate(self.max);
+        self.items.truncate(self.cap);
     }
 
-    /// 把已有条目移到最前面。
+    /// 把已有条目移到最前面；不在缓存里返回 false。
     pub fn touch(&mut self, key: i64, now: i64) -> bool {
         let Some(pos) = self.items.iter().position(|e| e.key == key) else {
             return false;
@@ -79,13 +86,19 @@ impl History {
         self.items.len() != before
     }
 
+    /// 用数据库里的最新数据整体替换缓存。
+    pub fn replace(&mut self, mut items: Vec<Entry>) {
+        items.truncate(self.cap);
+        self.items = items;
+    }
+
     pub fn clear(&mut self) {
         self.items.clear();
     }
 
-    pub fn set_max(&mut self, max: usize) {
-        self.max = max;
-        self.items.truncate(max);
+    pub fn set_max(&mut self, max_items: usize) {
+        self.cap = max_items.min(RECENT_CACHE);
+        self.items.truncate(self.cap);
     }
 }
 
@@ -94,7 +107,7 @@ mod tests {
     use super::*;
 
     fn e(key: i64) -> Entry {
-        Entry { key, kind: Kind::Text, preview: key.to_string(), search: String::new(), last_used: 0 }
+        Entry { key, kind: Kind::Text, preview: key.to_string(), last_used: 0 }
     }
 
     #[test]
@@ -114,5 +127,12 @@ mod tests {
         assert_eq!(h.get(0).unwrap().key, 3);
         assert_eq!(h.get(0).unwrap().last_used, 99);
         assert!(!h.touch(42, 0));
+    }
+
+    #[test]
+    fn cache_is_bounded() {
+        let h = History::new((0..2000).map(e).collect(), 100_000);
+        assert_eq!(h.cap(), RECENT_CACHE);
+        assert_eq!(h.iter().count(), RECENT_CACHE);
     }
 }

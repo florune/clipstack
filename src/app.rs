@@ -72,6 +72,8 @@ struct App {
     /// 我们自己最后一次写剪贴板后的序列号，对应的更新通知要忽略。
     own_seq: u32,
     last_seq: u32,
+    /// 面板上一次搜索的内容，用来合并连续的输入事件。
+    last_query: String,
     /// 当前剪贴板内容是否就是 history[0]（被忽略的内容不算），决定粘贴后要不要恢复。
     current_recorded: bool,
     prev_foreground: HWND,
@@ -88,6 +90,10 @@ fn with_app<R>(f: impl FnOnce(&mut App) -> R) -> Option<R> {
 
 fn now_ms() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as i64)
+}
+
+fn row(key: i64, preview: String) -> Row {
+    Row { key, label: if preview.is_empty() { "（空白）".into() } else { preview } }
 }
 
 fn beep() {
@@ -182,6 +188,7 @@ pub fn run(init: Init) {
             paused: false,
             own_seq: 0,
             last_seq: 0,
+            last_query: String::new(),
             current_recorded: false,
             prev_foreground: HWND::default(),
             hotkeys: HashMap::new(),
@@ -238,6 +245,9 @@ unsafe extern "system" fn host_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
         },
         panel::WM_PANEL_PASTE => {
             with_app(|a| a.paste_key(wp.0 as i64, lp.0 != 0));
+        }
+        panel::WM_PANEL_QUERY => {
+            with_app(|a| a.on_panel_query());
         }
         panel::WM_PANEL_DELETE => {
             with_app(|a| a.delete_key(wp.0 as i64));
@@ -355,8 +365,9 @@ impl App {
             Err(e) => return Some(format!("配置文件有误，未生效：\n{e}")),
         };
         self.macros = cfg.compile_macros().unwrap_or_default();
-        self.history.set_max(cfg.general.max_items);
         self.store.set_max(cfg.general.max_items);
+        self.history.set_max(cfg.general.max_items);
+        self.history.replace(self.store.recent(self.history.cap()));
         self.cfg = cfg;
         let errors = self.register_hotkeys();
         if errors.is_empty() {
@@ -426,13 +437,7 @@ impl App {
     }
 
     fn record(&mut self, data: ClipData) {
-        let entry = Entry {
-            key: data.key(),
-            kind: data.kind(),
-            preview: data.preview(),
-            search: data.search_text(),
-            last_used: now_ms(),
-        };
+        let entry = Entry { key: data.key(), kind: data.kind(), preview: data.preview(), last_used: now_ms() };
         self.history.push_front(entry.clone());
         self.store.upsert(Record { entry, data });
         self.current_recorded = true;
@@ -492,18 +497,29 @@ impl App {
         }
     }
 
+    fn recent_rows(&self) -> Vec<Row> {
+        self.history.iter().take(panel::MAX_ROWS).map(|e| row(e.key, e.preview.clone())).collect()
+    }
+
     fn show_panel(&mut self) {
         self.prev_foreground = unsafe { GetForegroundWindow() };
-        let rows = self
-            .history
-            .iter()
-            .map(|e| Row {
-                key: e.key,
-                label: if e.preview.is_empty() { "（空白）".into() } else { e.preview.clone() },
-                search: e.search.clone(),
-            })
-            .collect();
-        panel::show(rows);
+        self.last_query.clear();
+        panel::show(self.recent_rows());
+    }
+
+    /// 搜索框变化：空查询显示最近的记录，否则走数据库全文索引。
+    fn on_panel_query(&mut self) {
+        let query = panel::query();
+        if query == self.last_query {
+            return;
+        }
+        self.last_query = query;
+        let rows = if self.last_query.trim().is_empty() {
+            self.recent_rows()
+        } else {
+            self.store.search(&self.last_query, panel::MAX_ROWS).into_iter().map(|(k, p)| row(k, p)).collect()
+        };
+        panel::set_rows(rows);
     }
 
     /// 面板里选中某条：它变成当前内容并粘贴到之前的窗口。
@@ -518,8 +534,10 @@ impl App {
             return;
         }
         let now = now_ms();
-        if self.history.touch(key, now) {
-            self.store.touch(key, now);
+        self.store.touch(key, now);
+        if !self.history.touch(key, now) {
+            // 搜索出来的旧条目不在内存缓存里
+            self.history.push_front(Entry { key, kind: data.kind(), preview: data.preview(), last_used: now });
         }
         self.current_recorded = true;
         focus_window(self.prev_foreground);
@@ -528,8 +546,10 @@ impl App {
     }
 
     fn delete_key(&mut self, key: i64) {
+        self.store.delete(key);
         if self.history.remove(key) {
-            self.store.delete(key);
+            // 从数据库补齐缓存（删除命令先于这次查询执行）
+            self.history.replace(self.store.recent(self.history.cap()));
         }
     }
 

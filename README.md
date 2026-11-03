@@ -39,7 +39,7 @@ cargo build --release
 
 | 按键 | 作用 |
 |---|---|
-| 直接输入 | 搜索（空格分隔多个关键词，需全部命中） |
+| 直接输入 | 全文搜索全部历史（空格分隔多个关键词，需全部命中），最多显示 200 条 |
 | ↑ ↓ / PageUp PageDown | 选择 |
 | Enter / 双击 | 粘贴，该条目变成当前内容 |
 | Shift+Enter | 只粘贴纯文本 |
@@ -116,6 +116,8 @@ steps = [
 | 粘贴 | 写入剪贴板 → 等用户松开修饰键 → `SendInput` 模拟 Ctrl+V |
 | 持久化 | SQLite（WAL），后台线程写入，不阻塞 UI |
 | 去重 | 按内容的 xxh3 哈希去重，重复复制的条目移到最前 |
+| 搜索 | SQLite FTS5 全文索引（trigram 分词，支持中文和任意子串，不区分大小写），按最近使用顺序取前 200 条；少于 3 个字的关键词在最近 5000 条里逐条匹配 |
+| 内存 | 只缓存最近 500 条的预览，完整内容和索引都在数据库里，内存不随历史条数增长 |
 | 历史面板 | 原生 Win32 窗口，提前创建、平时隐藏，唤出无需等待 |
 | 开机自启 | `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`，不需要管理员权限 |
 
@@ -133,6 +135,14 @@ cargo test
 cargo clippy --all-targets
 cargo fmt --check
 ```
+
+搜索性能测试（写入 10 万条、每条约 600 字节，然后测搜索耗时）：
+
+```bash
+cargo test --release -- --ignored --nocapture bench_search
+```
+
+参考结果：每次搜索 0.1–3.3 ms；写入平均约 0.9 ms/条（在后台线程）；数据库约 315 MB（trigram 索引大约是原文的 4 倍）。
 
 ## 许可证
 
