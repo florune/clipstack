@@ -336,11 +336,15 @@ pub fn write(hwnd: HWND, f: &Formats, data: &ClipData, plain: bool) -> bool {
 
 /// 当前剪贴板所有者的进程文件名，例如 "KeePass.exe"。
 pub fn owner_exe() -> Option<String> {
+    window_exe(unsafe { GetClipboardOwner() }.ok()?)
+}
+
+/// 窗口所属进程的文件名，例如 "Xshell.exe"。
+pub fn window_exe(hwnd: HWND) -> Option<String> {
+    if hwnd.is_invalid() {
+        return None;
+    }
     unsafe {
-        let hwnd = GetClipboardOwner().ok()?;
-        if hwnd.is_invalid() {
-            return None;
-        }
         let mut pid = 0u32;
         GetWindowThreadProcessId(hwnd, Some(&mut pid));
         if pid == 0 {

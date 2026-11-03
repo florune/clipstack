@@ -455,6 +455,12 @@ impl App {
         }
     }
 
+    /// 按前台程序选粘贴键（终端用 Shift+Insert）并发送。
+    fn send_paste(&self) {
+        let exe = clip::window_exe(unsafe { GetForegroundWindow() });
+        input::send_combo(&self.cfg.paste_combo(exe.as_deref()));
+    }
+
     fn cancel_restore(&self) {
         let _ = unsafe { KillTimer(Some(self.hwnd), TIMER_RESTORE) };
     }
@@ -480,7 +486,7 @@ impl App {
             return;
         }
         input::wait_modifiers_released(MODIFIER_TIMEOUT);
-        input::send_combo(&Combo::CTRL_V);
+        self.send_paste();
         if restore {
             self.schedule_restore();
         }
@@ -518,7 +524,7 @@ impl App {
         self.current_recorded = true;
         focus_window(self.prev_foreground);
         input::wait_modifiers_released(MODIFIER_TIMEOUT);
-        input::send_combo(&Combo::CTRL_V);
+        self.send_paste();
     }
 
     fn delete_key(&mut self, key: i64) {
@@ -550,7 +556,7 @@ impl App {
                         break;
                     }
                     used_clipboard = true;
-                    input::send_combo(&Combo::CTRL_V);
+                    self.send_paste();
                     thread::sleep(Duration::from_millis(self.cfg.general.macro_paste_delay_ms));
                 }
                 Step::Key(c) => {

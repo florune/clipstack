@@ -13,6 +13,7 @@ pub const DEFAULT_TOML: &str = include_str!("../assets/default_config.toml");
 pub struct Config {
     pub general: General,
     pub hotkeys: Hotkeys,
+    pub paste: Paste,
     #[serde(rename = "macro")]
     pub macros: Vec<MacroDef>,
 }
@@ -54,6 +55,44 @@ pub struct Hotkeys {
 impl Default for Hotkeys {
     fn default() -> Self {
         Hotkeys { paste_previous: "Ctrl+Shift+V".into(), show_panel: "Ctrl+Alt+V".into(), toggle_pause: String::new() }
+    }
+}
+
+/// clipstack 把内容写进剪贴板后，用什么按键让目标程序粘贴。
+#[derive(Debug, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Paste {
+    pub keys: String,
+    pub terminal_keys: String,
+    pub terminal_apps: Vec<String>,
+}
+
+impl Default for Paste {
+    fn default() -> Self {
+        Paste {
+            keys: "Ctrl+V".into(),
+            terminal_keys: "Shift+Insert".into(),
+            terminal_apps: [
+                "WindowsTerminal.exe",
+                "OpenConsole.exe",
+                "conhost.exe",
+                "cmd.exe",
+                "powershell.exe",
+                "pwsh.exe",
+                "putty.exe",
+                "kitty.exe",
+                "Xshell.exe",
+                "MobaXterm.exe",
+                "SecureCRT.exe",
+                "mintty.exe",
+                "Tabby.exe",
+                "alacritty.exe",
+                "wezterm-gui.exe",
+                "WindTerm.exe",
+            ]
+            .map(String::from)
+            .to_vec(),
+        }
     }
 }
 
@@ -106,12 +145,21 @@ impl Config {
         if cfg.general.max_items == 0 {
             return Err("general.max_items 必须大于 0".into());
         }
+        Combo::parse(&cfg.paste.keys).map_err(|e| format!("paste.keys：{e}"))?;
+        Combo::parse(&cfg.paste.terminal_keys).map_err(|e| format!("paste.terminal_keys：{e}"))?;
         cfg.compile_macros()?;
         Ok(cfg)
     }
 
     pub fn max_item_bytes(&self) -> usize {
         (self.general.max_item_mb as usize).saturating_mul(1024 * 1024)
+    }
+
+    /// 前台程序 `exe` 用的粘贴键：终端里 Ctrl+V 会被当成字符发给 shell，所以改用 Shift+Insert。
+    pub fn paste_combo(&self, exe: Option<&str>) -> Combo {
+        let is_terminal = exe.is_some_and(|exe| self.paste.terminal_apps.iter().any(|a| a.eq_ignore_ascii_case(exe)));
+        let keys = if is_terminal { &self.paste.terminal_keys } else { &self.paste.keys };
+        Combo::parse(keys).unwrap_or(Combo::CTRL_V)
     }
 
     pub fn compile_macros(&self) -> Result<Vec<Macro>, String> {
@@ -153,7 +201,21 @@ mod tests {
         assert_eq!(cfg.general.ignore_apps, def.general.ignore_apps);
         assert_eq!(cfg.hotkeys.paste_previous, def.hotkeys.paste_previous);
         assert_eq!(cfg.hotkeys.show_panel, def.hotkeys.show_panel);
+        assert_eq!(cfg.paste.keys, def.paste.keys);
+        assert_eq!(cfg.paste.terminal_keys, def.paste.terminal_keys);
+        assert_eq!(cfg.paste.terminal_apps, def.paste.terminal_apps);
         assert!(cfg.macros.is_empty());
+    }
+
+    #[test]
+    fn terminals_use_shift_insert() {
+        let cfg = Config::default();
+        assert_eq!(cfg.paste_combo(Some("notepad.exe")), Combo::CTRL_V);
+        assert_eq!(cfg.paste_combo(None), Combo::CTRL_V);
+        let term = cfg.paste_combo(Some("xshell.EXE"));
+        assert!(term.shift && !term.ctrl);
+        assert_eq!(term, Combo::parse("Shift+Insert").unwrap());
+        assert!(Config::parse("[paste]\nterminal_keys = 'Hyper+V'").is_err());
     }
 
     #[test]

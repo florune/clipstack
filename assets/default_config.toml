@@ -29,6 +29,18 @@ show_panel = "Ctrl+Alt+V"
 # 暂停 / 恢复记录
 toggle_pause = ""
 
+[paste]
+# clipstack 粘贴时模拟的按键
+keys = "Ctrl+V"
+# 终端里 Ctrl+V 不是粘贴（会作为 ^V 发给 shell，bash 里表现为回车变成 ^M），
+# 所以下面这些程序改用 terminal_keys 粘贴。用的终端不在列表里就加上它的进程名。
+terminal_keys = "Shift+Insert"
+terminal_apps = [
+  "WindowsTerminal.exe", "OpenConsole.exe", "conhost.exe", "cmd.exe", "powershell.exe", "pwsh.exe",
+  "putty.exe", "kitty.exe", "Xshell.exe", "MobaXterm.exe", "SecureCRT.exe", "mintty.exe",
+  "Tabby.exe", "alacritty.exe", "wezterm-gui.exe", "WindTerm.exe",
+]
+
 # ---------------------------------------------------------------------------
 # 序列宏：每个 [[macro]] 是一个宏，按下 hotkey 后依次执行 steps。
 #

@@ -49,6 +49,12 @@ cargo build --release
 
 所有全局快捷键都可以在配置文件里修改。
 
+### 在终端 / SSH 客户端里粘贴
+
+终端里的 Ctrl+V 不是粘贴，它会作为控制字符 `^V` 发给远端 shell（bash 的 quoted-insert），结果回车变成 `^M`、报 `command not found`。所以当前台是终端程序时，clipstack 改用 **Shift+Insert** 粘贴。
+
+默认识别的终端：Windows Terminal、cmd、PowerShell、PuTTY、KiTTY、Xshell、MobaXterm、SecureCRT、mintty（Git Bash）、Tabby、Alacritty、WezTerm、WindTerm。用的终端不在列表里，就把它的进程名加到配置的 `[paste] terminal_apps` 里。
+
 ## 配置
 
 托盘右键 →“编辑配置文件”，改完点“重新加载配置”即可生效，不用重启。完整的配置项说明见 [assets/default_config.toml](assets/default_config.toml)。
@@ -66,6 +72,11 @@ ignore_apps = ["KeePass.exe", "1Password.exe"]
 paste_previous = "Ctrl+Shift+V"
 show_panel = "Ctrl+Alt+V"
 toggle_pause = ""         # 留空表示不注册
+
+[paste]
+keys = "Ctrl+V"                    # 普通程序的粘贴键
+terminal_keys = "Shift+Insert"     # 终端程序的粘贴键
+terminal_apps = ["Xshell.exe", "putty.exe", "WindowsTerminal.exe"]  # 默认列表更长
 ```
 
 ### 序列宏
